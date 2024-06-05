@@ -1,10 +1,10 @@
-/*! reef v12.1.1 | (c) 2022 Chris Ferdinandi | MIT License | http://github.com/cferdinandi/reef */
+/*! reef v13.0.4 | (c) 2024 Chris Ferdinandi | MIT License | http://github.com/cferdinandi/reef */
 'use strict';
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
- * Emit a custom event
+ * Emit a custom reefevent
  * @param  {String} type   The event type
  * @param  {*}      detail Any details to pass along with the event
  * @param  {Node}   elem   The element to emit the event on
@@ -42,108 +42,67 @@ function getType (obj) {
 }
 
 /**
- * Create an immutable clone of data
- * @param  {*} obj The data object to copy
- * @return {*}     The clone of the array or object
- */
-function copy (obj) {
-
-	/**
-	 * Create an immutable copy of an object
-	 * @return {Object}
-	 */
-	function cloneObj () {
-		let clone = {};
-		for (let key in obj) {
-			if (Object.prototype.hasOwnProperty.call(obj, key)) {
-				clone[key] = copy(obj[key]);
-			}
-		}
-		return clone;
-	}
-
-	/**
-	 * Create an immutable copy of an array
-	 * @return {Array}
-	 */
-	function cloneArr () {
-		return obj.map(function (item) {
-			return copy(item);
-		});
-	}
-
-	// Get object type
-	let type = getType(obj);
-
-	// Return a clone based on the object type
-	if (type === 'object') return cloneObj();
-	if (type === 'array') return cloneArr();
-	return obj;
-
-}
-
-/**
  * Create a Proxy handler object
  * @param  {String} name The custom event namespace
  * @param  {Object} data The data object
  * @return {Object}      The handler object
  */
 function handler (name, data) {
-	let type = 'store' + (name ? `-${name}` : '');
+	let type = 'signal' + (name ? `-${name}` : '');
 	return {
 		get (obj, prop) {
-			if (prop === '_isProxy') return true;
-			if (['object', 'array'].includes(getType(obj[prop])) && !obj[prop]._isProxy) {
-				obj[prop] = new Proxy(obj[prop], handler(name, data));
+			if (prop === '_isSignal') return true;
+			if (['object', 'array'].includes(getType(obj[prop])) && !obj[prop]._isSignal) {
+				obj[prop] = new Proxy(obj[prop], handler(name));
 			}
 			return obj[prop];
 		},
 		set (obj, prop, value) {
 			if (obj[prop] === value) return true;
 			obj[prop] = value;
-			emit(type, data);
+			emit(type, {prop, value, action: 'set'});
 			return true;
 		},
 		deleteProperty (obj, prop) {
 			delete obj[prop];
-			emit(type, data);
+			emit(type, {prop, value: obj[prop], action: 'delete'});
 			return true;
 		}
 	};
 }
 
 /**
- * Create a new store
+ * Create a new signal
  * @param  {Object} data The data object
  * @param  {String} name The custom event namespace
- * @return {Proxy}       The reactive proxy
+ * @return {Proxy}       The signal Proxy
  */
-function store (data = {}, name = '') {
+function signal (data = {}, name = '') {
 	data = ['array', 'object'].includes(getType(data)) ? data : {value: data};
-	return new Proxy(data, handler(name, data));
+	return new Proxy(data, handler(name));
 }
 
 /**
- * Setter Class
+ * Store Class
  */
-class Setter {
+class Store {
 
 	/**
 	 * The constructor object
-	 * @param  {Node|String} elem     The element or selector to render the template into
-	 * @param  {Function}    template The template function to run when the data updates
-	 * @param  {Object}      options  Additional options
+	 * @param  {Object} data    The data object
+	 * @param  {Object} actions The store functions
+	 * @param  {String} name    The custom event namespace for the signal
 	 */
-	constructor (data, setters, name = '') {
+	constructor (data, actions, name = '') {
 
-		// Get store type
-		let type = 'store' + (name ? `-${name}` : '');
+		// Get signal type
+		let type = 'signal' + (name ? `-${name}` : '');
 
 		// Create data property setter/getter
 		Object.defineProperties(this, {
-			data: {
+			value: {
 				get () {
-					return copy(data);
+					return structuredClone(data);
 				},
 				set () {
 					return true;
@@ -151,11 +110,11 @@ class Setter {
 			}
 		});
 
-		// Add setter functions
-		for (let fn in setters) {
-			if (typeof setters[fn] !== 'function') continue;
+		// Add store functions
+		for (let fn in actions) {
+			if (typeof actions[fn] !== 'function') continue;
 			this[fn] = function (...args) {
-				setters[fn](data, ...args);
+				actions[fn](data, ...args);
 				emit(type, data);
 			};
 		}
@@ -166,12 +125,13 @@ class Setter {
 
 /**
  * Create a new store
- * @param  {Object} data The data object
- * @param  {String} name The custom event namespace
- * @return {Proxy}       The reactive proxy
+ * @param  {Object} data    The data object
+ * @param  {Object} setters The store functions
+ * @param  {String} name    The custom event namespace for the signal
+ * @return {Proxy}          The Store instance
  */
-function setter (data = {}, setters = {}, name = '') {
-	return new Setter(data, setters, name);
+function store (data = {}, setters = {}, name = '') {
+	return new Store(data, setters, name);
 }
 
 // Form fields and attributes that can be modified by users
@@ -182,23 +142,22 @@ let formAttsNoVal = ['checked', 'selected'];
 
 /**
  * Convert a template string into HTML DOM nodes
- * @param  {String} str The template string
- * @return {Node}       The template HTML
+ * @param  {String}  str The template string
+ * @return {Element}     The template HTML
  */
 function stringToHTML (str) {
 
-    // Create document
-    let parser = new DOMParser();
-    let doc = parser.parseFromString(str, 'text/html');
+	// Create document
+	let parser = new DOMParser();
+	let doc = parser.parseFromString(`<body><template>${str}</template></body>`, 'text/html');
 
-    // If there are items in the head, move them to the body
-    if (doc.head && doc.head.childNodes.length) {
-        Array.from(doc.head.childNodes).reverse().forEach(function (node) {
-            doc.body.insertBefore(node, doc.body.firstChild);
-        });
-    }
+	// If there's a body, return it
+	if (doc.body) {
+		return doc.body.firstElementChild.content;
+	}
 
-    return doc.body || document.createElement('body');
+	// Otherwise, create a body and return it
+	return document.createElement('body');
 
 }
 
@@ -212,31 +171,58 @@ function isFalsy (str) {
 }
 
 /**
+ * Add an event listener to an element
+ * @param  {Element} elem   The element to delegate events on
+ * @param  {String}  event  The event name
+ * @param  {String}  val    The function to run for the event
+ * @param  {Object}  events The allowed event functions
+ */
+function listen (elem, event, val, events) {
+
+	// Only run if there are events
+	if (!event.startsWith('on') || !events) return;
+
+	// If there's already a listener for this event, skip
+	if (!!elem[event]) return;
+
+	// Get the event listener ID
+	let fnName = val.split('(')[0];
+	let listener = events[fnName];
+	if (!listener) return;
+
+	// Start listening
+	elem[event] = listener;
+
+}
+
+/**
  * Check if attribute should be skipped (sanitize properties)
  * @param  {String}  name   The attribute name
  * @param  {String}  value  The attribute value
- * @param  {Boolean} events If true, inline events are allowed
  * @return {Boolean}        If true, skip the attribute
  */
-function skipAttribute (name, value, events) {
+function skipAttribute (name, value) {
 	let val = value.replace(/\s+/g, '').toLowerCase();
 	if (['src', 'href', 'xlink:href'].includes(name)) {
 		if (val.includes('javascript:') || val.includes('data:text/html')) return true;
 	}
-	if (!events && name.startsWith('on')) return true;
+	if (name.startsWith('on') || name.startsWith('@on') || name.startsWith('#on')) return true;
 }
 
 /**
  * Add an attribute to an element
- * @param {Node}   elem The element
- * @param {String} att  The attribute
- * @param {String} val  The value
- * @param  {Boolean} events If true, inline events are allowed
+ * @param {Node}   elem   The element
+ * @param {String} att    The attribute
+ * @param {String} val    The value
+ * @param {Object} events The allowed event functions
  */
 function addAttribute (elem, att, val, events) {
 
+	// If there's an event object, add listener
+	listen(elem, att, val, events);
+
 	// Sanitize dangerous attributes
-	if (skipAttribute(att, val, events)) return;
+	if (skipAttribute(att, val)) return;
 
 	// If it's a form attribute, set the property directly
 	if (formAtts.includes(att)) {
@@ -245,7 +231,6 @@ function addAttribute (elem, att, val, events) {
 
 	// Update the attribute
 	elem.setAttribute(att, val);
-
 
 }
 
@@ -268,9 +253,9 @@ function removeAttribute (elem, att) {
 
 /**
  * Compare the existing node attributes to the template node attributes and make updates
- * @param  {Node}    template The new template
- * @param  {Node}    existing The existing DOM node
- * @param  {Boolean} events   If true, inline events allowed
+ * @param  {Node}   template The new template
+ * @param  {Node}   existing The existing DOM node
+ * @param  {Object} events   The allowed event functions
  */
 function diffAttributes (template, existing, events) {
 
@@ -282,7 +267,7 @@ function diffAttributes (template, existing, events) {
 	let existingAtts = existing.attributes;
 
 	// Add and update attributes from the template into the DOM
-	for (let {name, value} of templateAtts) {
+	for (let {name, value} of Array.from(templateAtts)) {
 
 		// Skip [#*] attributes
 		if (name.startsWith('#')) continue;
@@ -305,7 +290,7 @@ function diffAttributes (template, existing, events) {
 	}
 
 	// Remove attributes from the DOM that shouldn't be there
-	for (let {name, value} of existingAtts) {
+	for (let {name, value} of Array.from(existingAtts)) {
 
 		// If the attribute exists in the template, skip it
 		if (templateAtts[name]) continue;
@@ -322,7 +307,8 @@ function diffAttributes (template, existing, events) {
 
 /**
  * Add default attributes to a newly created element
- * @param  {Node} elem The element
+ * @param  {Node}   elem   The element
+ * @param  {Object} events The allowed event functions
  */
 function addDefaultAtts (elem, events) {
 
@@ -331,12 +317,13 @@ function addDefaultAtts (elem, events) {
 
 	// Remove [@*] and [#*] attributes and replace them with the plain attributes
 	// Remove unsafe HTML attributes
-	for (let {name, value} of elem.attributes) {
+	for (let {name, value} of Array.from(elem.attributes)) {
 
 		// If the attribute should be skipped, remove it
-		if (skipAttribute(name, value, events)) {
+		if (skipAttribute(name, value)) {
 			removeAttribute(elem, name);
-			continue;
+			listen(elem, name, value, events);
+			return;
 		}
 
 		// If the attribute isn't a [@*] or [#*], skip it
@@ -376,36 +363,48 @@ function getNodeContent (node) {
 
 /**
  * Check if two nodes are different
- * @param  {Node}  node1 The first node
- * @param  {Node}  node2 The second node
- * @return {Boolean}     If true, they're not the same node
+ * @param  {Node}    node1 The first node
+ * @param  {Node}    node2 The second node
+ * @return {Boolean}       If true, they're not the same node
  */
 function isDifferentNode (node1, node2) {
 	return (
 		(typeof node1.nodeType === 'number' && node1.nodeType !== node2.nodeType) ||
 		(typeof node1.tagName === 'string' && node1.tagName !== node2.tagName) ||
-		(typeof node1.id === 'string' && node1.id !== node2.id) ||
-		(typeof node1.src === 'string' && node1.src !== node2.src)
+		(typeof node1.id === 'string' && !!node1.id && node1.id !== node2.id) ||
+		('getAttribute' in node1 && 'getAttribute' in node2 && node1.getAttribute('key') !== node2.getAttribute('key')) ||
+		(typeof node1.src === 'string' && !!node1.src && node1.src !== node2.src)
 	);
 }
 
 /**
- * Check if the desired node is further ahead in the DOM existingNodes
- * @param  {Node}     node           The node to look for
- * @param  {NodeList} existingNodes  The DOM existingNodes
- * @param  {Integer}  index          The indexing index
- * @return {Integer}                 How many nodes ahead the target node is
+ * Check if the desired node is further ahead in the current DOM tree branch
+ * @param  {Node}     node     The node to look for
+ * @param  {NodeList} existing The existing nodes in the DOM
+ * @return {Node}              The element from the DOM
  */
-function aheadInTree (node, existingNodes, index) {
-	return Array.from(existingNodes).slice(index + 1).find(function (branch) {
-		return !isDifferentNode(node, branch);
-	});
+function aheadInTree (node, existing) {
+
+	// If the node isn't an element, bail
+	if (node.nodeType !== 1) return;
+
+	// Look for the ID or [key] attribute
+	let id = node.getAttribute('id');
+	let key = node.getAttribute('key');
+	if (!id || !key) return;
+
+	// Use the ID or [key] as the selector
+	let selector = id ? `#${id}` : `[key="${key}"]`;
+
+	// Look for the corresponding element in the DOM
+	return existing.querySelector(`:scope > ${selector}`);
+
 }
 
 /**
  * If there are extra elements in DOM, remove them
- * @param  {Array} existingNodes      The existing DOM
- * @param  {Array} templateNodes The template
+ * @param  {Array} existingNodes The existing DOM nodes
+ * @param  {Array} templateNodes The template nodes
  */
 function trimExtraNodes (existingNodes, templateNodes) {
 	let extra = existingNodes.length - templateNodes.length;
@@ -417,7 +416,7 @@ function trimExtraNodes (existingNodes, templateNodes) {
 
 /**
  * Remove scripts from HTML
- * @param  {Node}    elem The element to remove scripts from
+ * @param  {Node} elem The element to remove scripts from
  */
 function removeScripts (elem) {
 	let scripts = elem.querySelectorAll('script');
@@ -428,9 +427,9 @@ function removeScripts (elem) {
 
 /**
  * Diff the existing DOM node versus the template
- * @param  {Array}   template The template HTML
- * @param  {Node}    existing The current DOM HTML
- * @param  {Boolean} events   If true, inline events allowed
+ * @param  {Array}  template The template HTML
+ * @param  {Node}   existing The current DOM HTML
+ * @param  {Object} events   The allowed event functions
  */
 function diff (template, existing, events) {
 
@@ -444,7 +443,7 @@ function diff (template, existing, events) {
 	// Loop through each node in the template and compare it to the matching element in the UI
 	templateNodes.forEach(function (node, index) {
 
-		// If element doesn't exist, create it
+		// If there's no existing element, create and append
 		if (!existingNodes[index]) {
 			let clone = node.cloneNode(true);
 			addDefaultAtts(clone, events);
@@ -452,13 +451,13 @@ function diff (template, existing, events) {
 			return;
 		}
 
-		// If there is, but it's not the same node type, insert the new node before the existing one
+		// If there is, but it's not the same node type...
 		if (isDifferentNode(node, existingNodes[index])) {
 
 			// Check if node exists further in the tree
-			let ahead = aheadInTree(node, existingNodes, index);
+			let ahead = aheadInTree(node, existing);
 
-			// If not, insert the node before the current one
+			// If not, insert the new node before the current one
 			if (!ahead) {
 				let clone = node.cloneNode(true);
 				addDefaultAtts(clone, events);
@@ -466,10 +465,13 @@ function diff (template, existing, events) {
 				return;
 			}
 
-			// Otherwise, move it to the current spot
+			// Otherwise, move existing node to the current spot
 			existingNodes[index].before(ahead);
 
 		}
+
+		// Stop diffing if element should be ignored
+		if (templateNodes[index] && 'hasAttribute' in templateNodes[index] && templateNodes[index].hasAttribute('reef-ignore')) return;
 
 		// If attributes are different, update them
 		diffAttributes(node, existingNodes[index], events);
@@ -514,18 +516,19 @@ function diff (template, existing, events) {
  * Render a template into the UI
  * @param  {Node|String} elem     The element or selector to render the template into
  * @param  {String}      template The template to render
- * @param  {Boolean}     events   If true, inline events allowed
+ * @param  {Object}      events   The allowed event functions
  */
 function render (elem, template, events) {
 	let node = getElem(elem);
 	let html = stringToHTML(template);
+	if (!emit('before-render', null, node)) return;
 	diff(html, node, events);
 	emit('render', null, node);
 }
 
 /**
  * Create the event handler function
- * @param {Class} instance The instance
+ * @param {Class} instance The Component instance
  */
 function createHandler (instance) {
 	return function handler (event) {
@@ -540,16 +543,18 @@ class Component {
 
 	/**
 	 * The constructor object
-	 * @param  {Node|String} elem     The element or selector to render the template into
-	 * @param  {Function}    template The template function to run when the data updates
-	 * @param  {Object}      options  Additional options
+	 * @param  {Node|String} elem            The element or selector to render the template into
+	 * @param  {Function}    template        The template function to run when the data updates
+	 * @param  {Object}      options         Additional options
+	 * @param  {Array}       options.signals The names of the signals to listen for
+	 * @param  {Object}      options.events  The allowed event functions
 	 */
 	constructor (elem, template, options) {
 
 		// Create instance properties
 		this.elem = elem;
 		this.template = template;
-		this.stores = options.stores ? options.stores.map((store) => `reef:store-${store}`) : ['reef:store'];
+		this.signals = options.signals ? options.signals.map((signal) => `reef:signal-${signal}`) : ['reef:signal'];
 		this.events = options.events;
 		this.handler = createHandler(this);
 		this.debounce = null;
@@ -563,8 +568,8 @@ class Component {
 	 * Start reactive data rendering
 	 */
 	start () {
-		for (let store of this.stores) {
-			document.addEventListener(store, this.handler);
+		for (let signal of this.signals) {
+			document.addEventListener(signal, this.handler);
 		}
 		this.render();
 		emit('start', null, getElem(this.elem));
@@ -574,8 +579,8 @@ class Component {
 	 * Stop reactive data rendering
 	 */
 	stop () {
-		for (let store of this.stores) {
-			document.removeEventListener(store, this.handler);
+		for (let signal of this.signals) {
+			document.removeEventListener(signal, this.handler);
 		}
 		emit('stop', null, getElem(this.elem));
 	}
@@ -612,8 +617,44 @@ function component (elem, template, options = {}) {
 	return new Component(elem, template, options);
 }
 
+// Hold the selector for the element to focus on
+let focusOn;
+
+/**
+ * Set focus on the element
+ * 1ms delay prevents odd bugs from browser-native focus shifts
+ */
+function setFocus () {
+	setTimeout(function () {
+
+		// Find target element in the DOM
+		let elem = document.querySelector(focusOn);
+		focusOn = null;
+		if (!elem) return;
+
+		// Try to focus element
+		elem.focus();
+		if (document.activeElement === elem) return;
+
+		// If element could not be focused, set a tabindex and try again
+		elem.setAttribute('tabindex', -1);
+		elem.focus();
+
+	}, 1);
+}
+
+/**
+ * Shift focus to trigger a screen reader announcement after content is loaded
+ */
+function focus (selector) {
+	if (!selector || typeof selector !== 'string') return;
+	focusOn = selector;
+	document.addEventListener('reef:render', setFocus, {once: true});
+}
+
 exports.component = component;
+exports.focus = focus;
 exports.render = render;
-exports.setter = setter;
+exports.signal = signal;
 exports.store = store;
 //# sourceMappingURL=reef.cjs.js.map
