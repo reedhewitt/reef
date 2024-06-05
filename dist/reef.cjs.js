@@ -1,8 +1,6 @@
 /*! reef v13.0.4 | (c) 2024 Chris Ferdinandi | MIT License | http://github.com/cferdinandi/reef */
 'use strict';
 
-Object.defineProperty(exports, '__esModule', { value: true });
-
 /**
  * Emit a custom reefevent
  * @param  {String} type   The event type
@@ -600,7 +598,14 @@ class Component {
 
 		// Setup the new render to run at the next animation frame
 		self.debounce = window.requestAnimationFrame(function () {
-			render(self.elem, self.template(), self.events);
+			const template = self.template();
+			
+			// Check whether template() returned a string or a promise.
+			if (typeof template === 'string') {
+				render(self.elem, template, self.events);
+			} else if (template && typeof template.then === 'function' && template[Symbol.toStringTag] === 'Promise') {
+				template.then(templateResult => render(self.elem, templateResult, self.events));
+			}
 		});
 
 	}

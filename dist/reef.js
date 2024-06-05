@@ -599,7 +599,14 @@ var reef = (function (exports) {
 
 			// Setup the new render to run at the next animation frame
 			self.debounce = window.requestAnimationFrame(function () {
-				render(self.elem, self.template(), self.events);
+				const template = self.template();
+				
+				// Check whether template() returned a string or a promise.
+				if (typeof template === 'string') {
+					render(self.elem, template, self.events);
+				} else if (template && typeof template.then === 'function' && template[Symbol.toStringTag] === 'Promise') {
+					template.then(templateResult => render(self.elem, templateResult, self.events));
+				}
 			});
 
 		}
@@ -656,8 +663,6 @@ var reef = (function (exports) {
 	exports.render = render;
 	exports.signal = signal;
 	exports.store = store;
-
-	Object.defineProperty(exports, '__esModule', { value: true });
 
 	return exports;
 
